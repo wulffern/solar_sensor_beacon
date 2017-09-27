@@ -120,7 +120,9 @@ endef
 
 .PHONY: $(TARGETS) default all clean help flash
 
+
 all: $(TARGETS)
+
 
 clean:
 	$(RM) $(OUTPUT_DIRECTORY)
@@ -167,3 +169,6 @@ DUMP_FILE_LIST := \
 %.hex: %.out
 	@echo Preparing: $@
 	$(NO_ECHO)$(OBJCOPY) -O ihex $< $@
+
+
+

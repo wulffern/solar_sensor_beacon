@@ -34,10 +34,9 @@
 #include "hal_radio.h"
 #include "hal_timer.h"
 #include "hal_clock.h"
-#include "drv_lps25h.h"
-#include "drv_lps25h_bitfields.h"
 #include "hal_serial.h"
 #include "hal_twi.h"
+#include "nrf_gpio.h"
 
 #include "nrf.h"
 
@@ -47,10 +46,12 @@
 #include <stdlib.h>
 
 
+#define LED1 17
+#define LED2 18
 /* #define DBG_RADIO_ACTIVE_ENABLE      */
 
-/* #define DBG_BEACON_START_PIN    (16) */
-/* #define DBG_HFCLK_ENABLED_PIN   (27) */
+/* #define DBG_BEACON_START_PIN    (17) */
+/* #define DBG_HFCLK_ENABLED_PIN   (18) */
 /* #define DBG_HFCLK_DISABLED_PIN  (26) */
 /* #define DBG_PKT_SENT_PIN        ( 9) */
 /* #define DBG_CALCULATE_BEGIN_PIN (15) */
@@ -146,6 +147,8 @@ static const hal_serial_cfg_t serial_cfg =
 #endif
 
 
+
+
 #ifdef TEMPERATURE_AND_PRESSURE_BEACON
 #define M_BEACON_PDU_TYPE M_BEACON_PDU_TYPE_TEMP_PRES
 #endif
@@ -157,10 +160,10 @@ static const hal_serial_cfg_t serial_cfg =
 
 
 #define HFCLK_STARTUP_TIME_US                       (1600)              /* The time in microseconds it takes to start up the HF clock*. */
-#define INTERVAL_US                                 (1000000)           /* The time in microseconds between advertising events. */
+#define INTERVAL_US                                 (100000)           /* The time in microseconds between advertising events. */
 #define INITIAL_TIMEOUT                             (INTERVAL_US)       /* The time in microseconds until adverising the first time. */
 #define START_OF_INTERVAL_TO_SENSOR_READ_TIME_US    (INTERVAL_US / 2)   /* The time from the start of the latest advertising event until reading the sensor. */
-#define SENSOR_SKIP_READ_COUNT                      (10)                /* The number of advertising events between reading the sensor. */
+#define SENSOR_SKIP_READ_COUNT                      (1)                /* The number of advertising events between reading the sensor. */
 
 
 #if INITIAL_TIMEOUT - HFCLK_STARTUP_TIME_US < 400
@@ -196,6 +199,12 @@ static uint32_t m_time_us;                  /* Keeps track of the latest schedul
 static uint32_t m_skip_read_counter = 0;    /* Keeps track on when to read the sensor. */
 static uint8_t m_adv_pdu[40];               /* The RAM representation of the advertising PDU. */
 
+uint8_t m_adv_pdu1[]                      = {
+	 0b00100000, // ADV_NONCONN_IND, TxAdd = 0, RxAdd = 0
+	 0b01001000, // Length = 10
+	 0xCF,0xCF,0xCF, 0xCF, 0xCF,0xCF, //Address
+	 0xa1,0xa1
+  };
 
 /* Initializes the beacon advertising PDU.
  */
@@ -205,6 +214,10 @@ static void m_beacon_pdu_init(uint8_t * p_beacon_pdu)
     p_beacon_pdu[1] = 0;
     p_beacon_pdu[2] = 0;
 }
+
+
+
+
 
 
 /* Sets the BLE address field in the sensor beacon PDU.
@@ -327,23 +340,17 @@ static void __forceinline cpu_wfe(void)
 }
 
 
-/* Hook for the access mode feature of the lps25h driver.
- */
-static void cpu_sleep_hook(void)
-{
-    cpu_wfe();
-}
 
 
 /* Powers up the the lps25h device and TWI pull-up resistors.
  */
 static void sensor_chip_powerup(void)
 {
-    NRF_GPIO->OUTSET = (1 << 5) | (1 << 8);
-    NRF_GPIO->OUTSET = (1 << 7);
+//    NRF_GPIO->OUTSET = (1 << 5) | (1 << 8);
+//    NRF_GPIO->OUTSET = (1 << 7);
 
-    NRF_GPIO->DIRSET = (1 << 5) | (1 << 8);
-    NRF_GPIO->DIRSET = (1 << 7);
+//    NRF_GPIO->DIRSET = (1 << 5) | (1 << 8);
+//    NRF_GPIO->DIRSET = (1 << 7);
 }
 
 
@@ -351,27 +358,6 @@ static void sensor_chip_powerup(void)
  */
 static bool sensor_chip_measurement_setup(void)
 {
-    static const drv_lps25h_cfg_t m_drv_lps25h_cfg =
-    {
-        .twi_id = HAL_TWI_ID_TWI0,
-        .twi_cfg.address   = (0x5C << TWI_ADDRESS_ADDRESS_Pos),
-        .twi_cfg.frequency = (TWI_FREQUENCY_FREQUENCY_K400 << TWI_FREQUENCY_FREQUENCY_Pos),
-        .p_sleep_hook = cpu_sleep_hook,
-    };
-    
-    if ( drv_lps25h_open(&m_drv_lps25h_cfg) == DRV_LPS25H_STATUS_CODE_SUCCESS )
-    {
-        drv_lps25h_access_mode_set(DRV_LPS25H_ACCESS_MODE_CPU_INACTIVE);
-    
-        drv_lps25h_ctrl_reg_modify((DRV_LSP25H_CTRL_REG_PD_Active << DRV_LSP25H_CTRL_REG_PD_Pos) |
-                                   (DRV_LSP25H_CTRL_REG_ODR_12HZ5 << DRV_LSP25H_CTRL_REG_ODR_Pos), 0);
-        
-        return ( true );
-    }
-    else
-    {
-        (void)drv_lps25h_close();
-    }
     
     return ( false );
 }
@@ -381,7 +367,6 @@ static bool sensor_chip_measurement_setup(void)
  */
 static void sensor_chip_measurement_done(void)
 {
-    (void)drv_lps25h_close();
 }
 
 
@@ -393,7 +378,7 @@ static void send_one_packet(uint8_t channel_index)
     
     m_radio_isr_called = false;
     hal_radio_channel_index_set(channel_index);
-    hal_radio_send(m_adv_pdu);
+    hal_radio_send(m_adv_pdu1);
     while ( !m_radio_isr_called )
     {
         cpu_wfe();
@@ -410,7 +395,7 @@ static void send_one_packet(uint8_t channel_index)
  */
 static void sensor_chip_powerdown(void)
 {
-    NRF_GPIO->DIRCLR = (1 << 5) | (1 << 7) | (1 << 8);
+//    NRF_GPIO->DIRCLR = (1 << 5) | (1 << 7) | (1 << 8);
 }
 
 
@@ -418,50 +403,12 @@ static void sensor_chip_powerdown(void)
  */
 static void sensor_handler(uint32_t start_time_us, uint32_t retry_interval_us, uint8_t retry_count)
 {
-    uint8_t status;
-    int32_t temperature;
-    uint32_t pressure;
+
 
     if ( sensor_chip_measurement_setup() )
     {
-        for ( int i = 0; i < retry_count; i++ )
-        {
-            m_rtc_isr_called = false;
-            hal_timer_timeout_set(start_time_us + (i * retry_interval_us));
-            while ( !m_rtc_isr_called )
-            {
-                cpu_wfe();
-            }
-            drv_lps25h_status_reg_get(&status);
-            
-            if ( ((status & (DRV_LSP25H_STATUS_REG_T_DA_Available << DRV_LSP25H_STATUS_REG_T_DA_Pos)) != 0)
-            &&   ((status & (DRV_LSP25H_STATUS_REG_P_DA_Available << DRV_LSP25H_STATUS_REG_P_DA_Pos)) != 0) )
-            {
-                break;
-            }
-        }
-
-        if ( ((status & (DRV_LSP25H_STATUS_REG_T_DA_Available << DRV_LSP25H_STATUS_REG_T_DA_Pos)) != 0)
-        &&   ((status & (DRV_LSP25H_STATUS_REG_P_DA_Available << DRV_LSP25H_STATUS_REG_P_DA_Pos)) != 0) )
-        {
-                if ( M_BEACON_PDU_TYPE == M_BEACON_PDU_TYPE_TEMP_ONLY ) 
-                {
-                    drv_lps25h_temperature_get(&temperature);
-                    m_beacon_pdu_sensor_data_set(&(m_adv_pdu[0]), &temperature, NULL);
-                }
-                else if ( M_BEACON_PDU_TYPE == M_BEACON_PDU_TYPE_TEMP_PRES ) 
-                {
-                    drv_lps25h_pressure_get(&pressure);
-                    drv_lps25h_temperature_get(&temperature);
-                    m_beacon_pdu_sensor_data_set(&(m_adv_pdu[0]), &temperature, &pressure);
-                }
-        }
-        else
-        {
-            m_beacon_pdu_sensor_data_reset(&(m_adv_pdu[0]), M_BEACON_PDU_TYPE);
-        }
-
-        sensor_chip_measurement_done();
+		m_beacon_pdu_sensor_data_set(&(m_adv_pdu[0]), 0,0);
+		sensor_chip_measurement_done();
     }
     sensor_chip_powerdown();
 }
@@ -478,6 +425,8 @@ static void beacon_handler(void)
 
     do
     {
+		nrf_gpio_pin_toggle(LED2);
+
         if ( m_skip_read_counter == 0 )
         {
             m_rtc_isr_called = false;
@@ -497,6 +446,7 @@ static void beacon_handler(void)
             
             sensor_handler(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US + 40000, 10000, 10);
         }
+
         m_skip_read_counter = ( (m_skip_read_counter + 1) < SENSOR_SKIP_READ_COUNT ) ? (m_skip_read_counter + 1) : 0;
         
         m_rtc_isr_called = false;
@@ -507,7 +457,7 @@ static void beacon_handler(void)
         }
         hal_clock_hfclk_enable();
         DBG_HFCLK_ENABLED;
-        
+
         m_rtc_isr_called = false;
         m_time_us += HFCLK_STARTUP_TIME_US; 
         hal_timer_timeout_set(m_time_us);
@@ -515,6 +465,7 @@ static void beacon_handler(void)
         {
             cpu_wfe();
         }
+
         send_one_packet(37);
         DBG_PKT_SENT;
         send_one_packet(38);
@@ -533,24 +484,29 @@ static void beacon_handler(void)
 
 int main(void)
 {        
-    DBG_BEACON_START;
+
+
+
+	
+	DBG_BEACON_START;
 
     NRF_GPIO->OUTCLR = 0xFFFFFFFF;
     NRF_GPIO->DIRCLR = 0xFFFFFFFF;
-        
+
+
+	nrf_gpio_cfg_output(LED2);
+
+
+
         
 #ifdef DBG_WFE_BEGIN_PIN
     NRF_GPIO->OUTSET = (1 << DBG_WFE_BEGIN_PIN);
     NRF_GPIO->DIRSET = (1 << DBG_WFE_BEGIN_PIN);
 #endif
     
-    hal_serial_init(&serial_cfg);
-    hal_twi_init();
-    
-    drv_lps25h_init();
     
     m_beacon_pdu_init(&(m_adv_pdu[0]));
-    m_beacon_pdu_bd_addr_default_set(&(m_adv_pdu[0]));
+   m_beacon_pdu_bd_addr_default_set(&(m_adv_pdu[0]));
     m_beacon_pdu_sensor_data_reset(&(m_adv_pdu[0]), M_BEACON_PDU_TYPE);
     
 #ifdef DBG_RADIO_ACTIVE_ENABLE

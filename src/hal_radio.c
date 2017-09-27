@@ -39,7 +39,7 @@ uint8_t seed[3] = {0x55, 0x55, 0x55};
 
 
 /**@brief The maximum possible length in device discovery mode. */
-#define DD_MAX_PAYLOAD_LENGTH         (31 + 6)
+#define DD_MAX_PAYLOAD_LENGTH         (2 + 6)
 
 
 /**@brief The default SHORTS configuration. */
