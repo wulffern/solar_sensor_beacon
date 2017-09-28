@@ -197,131 +197,23 @@ static bool volatile m_radio_isr_called;    /* Indicates that the radio ISR has 
 static bool volatile m_rtc_isr_called;      /* Indicates that the RTC ISR has executed. */
 static uint32_t m_time_us;                  /* Keeps track of the latest scheduled point in time. */
 static uint32_t m_skip_read_counter = 0;    /* Keeps track on when to read the sensor. */
-static uint8_t m_adv_pdu[40];               /* The RAM representation of the advertising PDU. */
 
-uint8_t m_adv_pdu1[]                      = {
-	 0b00100000, // ADV_NONCONN_IND, TxAdd = 0, RxAdd = 0
-	 0b01001000, // Length = 10
-	 0xCF,0xCF,0xCF, 0xCF, 0xCF,0xCF, //Address
-	 0xa1,0xa1
-  };
+/* uint8_t m_adv_pdu[]                      = { */
+/* 	 0b00100000, // ADV_NONCONN_IND, TxAdd = 0, RxAdd = 0 */
+/* 	 0b01001000, // Length = 10 */
+/* 	 0xCF,0xCF,0xCF, 0xCF, 0xCF,0xCF, //Address */
+/* 	 0xa1,0xa1,0xa1,0xa1 */
+/*   }; */
 
-/* Initializes the beacon advertising PDU.
- */
-static void m_beacon_pdu_init(uint8_t * p_beacon_pdu)
+static uint8_t adv_pdu[36 + 3] =
 {
-    p_beacon_pdu[0] = 0x42;
-    p_beacon_pdu[1] = 0;
-    p_beacon_pdu[2] = 0;
-}
+    0x42, 0x24, 0x00,
+    0xE2, 0xA3, 0x01, 0xE7, 0x61, 0xF7, 0x02, 0x01, 0x04, 0x1A, 0xFF, 0x59, 0x00, 0x02, 0x15, 0x01, 0x12, 0x23,
+    0x34, 0x45, 0x56, 0x67, 0x78, 0x89, 0x9A, 0xAB, 0xBC, 0xCD, 0xDE, 0xEF, 0xF0, 0x01, 0x02, 0x03, 0x04, 0xC3
+};
 
 
 
-
-
-
-/* Sets the BLE address field in the sensor beacon PDU.
- */
-static void m_beacon_pdu_bd_addr_default_set(uint8_t * p_beacon_pdu)
-{
-    if ( ( NRF_FICR->DEVICEADDR[0]           != 0xFFFFFFFF)
-    ||   ((NRF_FICR->DEVICEADDR[1] & 0xFFFF) != 0xFFFF) )
-    {
-        p_beacon_pdu[BD_ADDR_OFFS    ] = (NRF_FICR->DEVICEADDR[0]      ) & 0xFF;
-        p_beacon_pdu[BD_ADDR_OFFS + 1] = (NRF_FICR->DEVICEADDR[0] >>  8) & 0xFF;
-        p_beacon_pdu[BD_ADDR_OFFS + 2] = (NRF_FICR->DEVICEADDR[0] >> 16) & 0xFF;
-        p_beacon_pdu[BD_ADDR_OFFS + 3] = (NRF_FICR->DEVICEADDR[0] >> 24)       ;
-        p_beacon_pdu[BD_ADDR_OFFS + 4] = (NRF_FICR->DEVICEADDR[1]      ) & 0xFF;
-        p_beacon_pdu[BD_ADDR_OFFS + 5] = (NRF_FICR->DEVICEADDR[1] >>  8) & 0xFF;
-    }
-    else
-    {
-        static const uint8_t random_bd_addr[M_BD_ADDR_SIZE] = {0xE2, 0xA3, 0x01, 0xE7, 0x61, 0xF7};
-        memcpy(&(p_beacon_pdu[3]), &(random_bd_addr[0]), M_BD_ADDR_SIZE);
-    }
-    
-    p_beacon_pdu[1] = (p_beacon_pdu[1] == 0) ? M_BD_ADDR_SIZE : p_beacon_pdu[1];
-}
-
-
-/* Resets the sensor data of the sensor beacon PDU.
- */
-static void m_beacon_pdu_sensor_data_reset(uint8_t * p_beacon_pdu, m_beacon_pdu_type_t beacon_pdu_type)
-{
-    switch ( beacon_pdu_type )
-    {
-        case M_BEACON_PDU_TYPE_TEMP_ONLY:
-            {
-                static const uint8_t beacon_temp_only[31] = 
-                {
-                    0x02,
-                    0x01, 0x04,
-                    0x03,
-                    0x19, 0x00, 0x03,
-                    0x07,
-                    0x09, 0x54, 0x65, 0x6D, 0x70, 0x6F, 0x20,
-                    0x07,
-                    0x03, 0x02, 0x18, 0x09, 0x18, 0x0A, 0x18,
-                    0x07,
-                    0x16, 0x09, 0x18, 0xA3, 0x70, 0x45, 0x41,
-                };
-                memcpy(&(p_beacon_pdu[3 + M_BD_ADDR_SIZE]), &(beacon_temp_only[0]), sizeof(beacon_temp_only));
-                p_beacon_pdu[1] = M_BD_ADDR_SIZE + sizeof(beacon_temp_only);
-            }
-            break;
-        case M_BEACON_PDU_TYPE_TEMP_PRES:
-            {
-                static const uint8_t beacon_temp_pres[21] = 
-                {
-                    0x02,
-                    0x01, 0x04,
-                    0x03,
-                    0x03, 0xE5, 0xFE,
-                    /* Entry for temperature characteristics. Ref:
-                       sint16, https://developer.bluetooth.org/gatt/characteristics/Pages/CharacteristicViewer.aspx?u=org.bluetooth.characteristic.temperature.xml */
-                    0x05,
-                    0x16, 0x6E, 0x2A, 0x00, 0x00,               
-                    /* Entry for pressure characteristics. Ref:
-                       uint32, https://developer.bluetooth.org/gatt/characteristics/Pages/CharacteristicViewer.aspx?u=org.bluetooth.characteristic.pressure.xml */
-                    0x07,
-                    0x16, 0x6D, 0x2A, 0x00, 0x00, 0x00, 0x00,   
-                };
-                memcpy(&(p_beacon_pdu[3 + M_BD_ADDR_SIZE]), &(beacon_temp_pres[0]), sizeof(beacon_temp_pres));
-                p_beacon_pdu[1] = M_BD_ADDR_SIZE + sizeof(beacon_temp_pres);
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-
-/* Sets the sensor data of the sensor beacon PDU.
- */
-static void m_beacon_pdu_sensor_data_set(uint8_t * p_beacon_pdu, int32_t *p_temperature, uint32_t *p_pressure)
-{
-    if ( (p_pressure != NULL)&& (p_temperature != NULL) )
-    {
-        /* Pressure (Bluetooth standard) is in Pascal with one decimal, so
-           multiplying the value by 10. */
-        p_beacon_pdu[UINT32_PRESSURE_OFFS    ] = ((*p_pressure * 10)      ) & 0xFF;
-        p_beacon_pdu[UINT32_PRESSURE_OFFS + 1] = ((*p_pressure * 10) >>  8) & 0xFF;
-        p_beacon_pdu[UINT32_PRESSURE_OFFS + 2] = ((*p_pressure * 10) >> 16) & 0xFF;
-        /* The temperature (Bluetooth standard) is in Celsius with two decimals, so
-           deviding the value by an additional 10. */
-        p_beacon_pdu[SINT16_TEMPERATURE_OFFS    ] = ((*p_temperature / 10)     ) & 0xFF;
-        p_beacon_pdu[SINT16_TEMPERATURE_OFFS + 1] = ((*p_temperature / 10) >> 8) & 0xFF;
-    }
-    else if ( p_temperature != NULL )
-    {
-        /* The temperature is in Celsius with one decimal, so
-           deviding the value by an additional 100. */
-        p_beacon_pdu[FLOAT32_TEMPERATURE_OFFS    ] = ((*p_temperature / 100)     ) & 0xFF;
-        p_beacon_pdu[FLOAT32_TEMPERATURE_OFFS + 1] = ((*p_temperature / 100) >> 8) & 0xFF;
-        p_beacon_pdu[FLOAT32_TEMPERATURE_OFFS + 2] = 0x00;
-        p_beacon_pdu[FLOAT32_TEMPERATURE_OFFS + 3] = 0xFF;
-    }
-}
 
 
 /* Waits for the next NVIC event.
@@ -339,37 +231,6 @@ static void __forceinline cpu_wfe(void)
     DBG_WFE_END;
 }
 
-
-
-
-/* Powers up the the lps25h device and TWI pull-up resistors.
- */
-static void sensor_chip_powerup(void)
-{
-//    NRF_GPIO->OUTSET = (1 << 5) | (1 << 8);
-//    NRF_GPIO->OUTSET = (1 << 7);
-
-//    NRF_GPIO->DIRSET = (1 << 5) | (1 << 8);
-//    NRF_GPIO->DIRSET = (1 << 7);
-}
-
-
-/* Sets up the the lps25h device to measure temperature and pressure.
- */
-static bool sensor_chip_measurement_setup(void)
-{
-    
-    return ( false );
-}
-
-
-/* Ends after measuring temperature and pressure.
- */
-static void sensor_chip_measurement_done(void)
-{
-}
-
-
 /* Sends an advertising PDU on the given channel index.
  */
 static void send_one_packet(uint8_t channel_index)
@@ -378,7 +239,7 @@ static void send_one_packet(uint8_t channel_index)
     
     m_radio_isr_called = false;
     hal_radio_channel_index_set(channel_index);
-    hal_radio_send(m_adv_pdu1);
+    hal_radio_send(adv_pdu);
     while ( !m_radio_isr_called )
     {
         cpu_wfe();
@@ -388,29 +249,6 @@ static void send_one_packet(uint8_t channel_index)
     {
         __NOP();
     }
-}
-
-
-/* Powers down the the lps25h device and TWI pull-up resistors.
- */
-static void sensor_chip_powerdown(void)
-{
-//    NRF_GPIO->DIRCLR = (1 << 5) | (1 << 7) | (1 << 8);
-}
-
-
-/* Handles sensor managing.
- */
-static void sensor_handler(uint32_t start_time_us, uint32_t retry_interval_us, uint8_t retry_count)
-{
-
-
-    if ( sensor_chip_measurement_setup() )
-    {
-		m_beacon_pdu_sensor_data_set(&(m_adv_pdu[0]), 0,0);
-		sensor_chip_measurement_done();
-    }
-    sensor_chip_powerdown();
 }
 
 
@@ -425,7 +263,7 @@ static void beacon_handler(void)
 
     do
     {
-		nrf_gpio_pin_toggle(LED2);
+
 
         if ( m_skip_read_counter == 0 )
         {
@@ -435,7 +273,6 @@ static void beacon_handler(void)
             {
                 cpu_wfe();
             }
-            sensor_chip_powerup();
         
             m_rtc_isr_called = false;
             hal_timer_timeout_set(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US + 10000);
@@ -444,7 +281,8 @@ static void beacon_handler(void)
                 cpu_wfe();
             }
             
-            sensor_handler(m_time_us - START_OF_INTERVAL_TO_SENSOR_READ_TIME_US + 40000, 10000, 10);
+
+
         }
 
         m_skip_read_counter = ( (m_skip_read_counter + 1) < SENSOR_SKIP_READ_COUNT ) ? (m_skip_read_counter + 1) : 0;
@@ -465,7 +303,7 @@ static void beacon_handler(void)
         {
             cpu_wfe();
         }
-
+		nrf_gpio_pin_toggle(LED2);
         send_one_packet(37);
         DBG_PKT_SENT;
         send_one_packet(38);
@@ -505,9 +343,9 @@ int main(void)
 #endif
     
     
-    m_beacon_pdu_init(&(m_adv_pdu[0]));
-   m_beacon_pdu_bd_addr_default_set(&(m_adv_pdu[0]));
-    m_beacon_pdu_sensor_data_reset(&(m_adv_pdu[0]), M_BEACON_PDU_TYPE);
+
+
+
     
 #ifdef DBG_RADIO_ACTIVE_ENABLE
     NRF_GPIOTE->CONFIG[0] = (GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) 
